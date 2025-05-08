@@ -1,20 +1,21 @@
 <?php
-namespace App;
+namespace App\Config;
+
+use PDO;
+
+date_default_timezone_set('UTC');
 
 class Database {
-    public $connection;
+    private static $instance = null;
 
-    public function __construct() {
-        $this->connection = new \PDO(
-            "mysql:host=localhost;dbname=newwebsite_db",
-            "root",
-            "",
-            [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]
-        );
-    }
-    public function getUser($username) {
-        $stmt = $this->connection->prepare("SELECT * FROM users WHERE username = ?");
-        $stmt->execute([$username]);
-        return $stmt->fetch(\PDO::FETCH_ASSOC);
+    public static function getConnection(): PDO {
+        if (self::$instance === null) {
+            $dsn = 'mysql:host=' . $_ENV['DB_HOST'] . ';dbname=' . $_ENV['DB_NAME'] . ';charset=utf8mb4';
+            self::$instance = new PDO($dsn, $_ENV['DB_USER'], $_ENV['DB_PASS'], [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            ]);
+        }
+        return self::$instance;
     }
 }

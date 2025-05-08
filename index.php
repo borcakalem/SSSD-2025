@@ -1,73 +1,135 @@
 <?php
-require __DIR__.'/../vendor/autoload.php';
-require __DIR__.'/../src/Database.php';
 
-$db = new App\Database();
+require 'vendor/autoload.php'; // Only Composer's autoloader is needed
 
-// Handle actions based on URL
-$action = $_GET['action'] ?? '';
+// Load environment variables from .env
+use Dotenv\Dotenv;
+$dotenv = Dotenv::createImmutable(__DIR__);
+$dotenv->load();
 
-switch ($action) {
-    case 'login':
-        handleLogin($db);
-        break;
-    case 'register':
-        handleRegister($db);
-        break;
-    default:
-        showHomepage();
+// Start session
+session_start();
+
+// Database connection
+require 'src/Config/Database.php';
+
+// Helper to get current user from session
+function getCurrentUser() {
+    if (!isset($_SESSION['user_id'])) return null;
+    $userModel = new App\Models\User();
+    return $userModel->findById($_SESSION['user_id']);
 }
 
-// Functions
-function handleLogin($db) {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $user = $db->getUser($_POST['username']);
-        
-        if ($user && password_verify($_POST['password'], $user['password'])) {
-            echo "Login successful!";
-        } else {
-            echo "Invalid credentials";
-        }
-        exit;
+// Initialize Flight
+Flight::set('flight.base_url', '/newwebsite');
+
+// Routes
+Flight::route('GET /', function() {
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Welcome</title></head><body><h1>Welcome to NewWebsite</h1><p>Your API is running!</p></body></html>';
+});
+
+Flight::route('POST /api/register', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->register();
+});
+
+Flight::route('POST /api/login', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->login();
+    // After successful login, set session
+    // $_SESSION['user_id'] = $user['id'];
+});
+
+Flight::route('POST /api/setup-2fa', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->setup2fa();
+});
+
+Flight::route('POST /api/verify-2fa', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->verify2fa();
+});
+
+Flight::route('POST /api/forgot-password', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->forgotPassword();
+});
+
+Flight::route('POST /api/reset-password', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->resetPassword();
+});
+
+Flight::route('POST /api/send-sms-code', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->sendSmsCode();
+});
+
+Flight::route('POST /api/verify-sms-code', function() {
+    $controller = new App\Controllers\AuthController();
+    $controller->verifySmsCode();
+});
+
+// API: Get current user info
+Flight::route('GET /api/user', function() {
+    $user = getCurrentUser();
+    if (!$user) {
+        Flight::json(['error' => 'Not authenticated'], 401);
+        return;
     }
-    showLoginForm();
-}
+    unset($user['password_hash'], $user['email_verification_token'], $user['totp_secret'], $user['recovery_codes']);
+    Flight::json(['user' => $user]);
+});
 
-function handleRegister($db) {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        $stmt = $db->connection->prepare("INSERT INTO users (username, email, password) VALUES (?, ?, ?)");
-        $stmt->execute([
-            $_POST['username'],
-            $_POST['email'],
-            password_hash($_POST['password'], PASSWORD_DEFAULT)
-        ]);
-        echo "Registration successful!";
-        exit;
+// API: Logout
+Flight::route('POST /api/logout', function() {
+    session_destroy();
+    Flight::json(['message' => 'Logged out']);
+});
+
+// API: Change password
+Flight::route('POST /api/change-password', function() {
+    $user = getCurrentUser();
+    if (!$user) {
+        Flight::json(['error' => 'Not authenticated'], 401);
+        return;
     }
-    showRegistrationForm();
-}
+    $data = Flight::request()->data;
+    $current = $data['current_password'] ?? '';
+    $new = $data['new_password'] ?? '';
+    if (!$current || !$new) {
+        Flight::json(['error' => 'Current and new password required.'], 400);
+        return;
+    }
+    if (!password_verify($current, $user['password_hash'])) {
+        Flight::json(['error' => 'Current password is incorrect.'], 403);
+        return;
+    }
+    if (strlen($new) < 8 || !preg_match('/[A-Z]/', $new) || !preg_match('/[a-z]/', $new)) {
+        Flight::json(['error' => 'New password must be at least 8 characters and contain upper and lower case letters.'], 400);
+        return;
+    }
+    $userModel = new App\Models\User();
+    $userModel->changePassword($user['id'], $new);
+    Flight::json(['message' => 'Password changed successfully.']);
+});
 
-function showHomepage() {
-    echo '<h3>Choose an action:</h3>';
-    echo '<a href="?action=login">Login</a> | ';
-    echo '<a href="?action=register">Register</a>';
-}
+// API: 2FA status (enable/disable)
+Flight::route('POST /api/2fa-status', function() {
+    $user = getCurrentUser();
+    if (!$user) {
+        Flight::json(['error' => 'Not authenticated'], 401);
+        return;
+    }
+    $data = Flight::request()->data;
+    $enable = (bool)($data['enable'] ?? false);
+    $userModel = new App\Models\User();
+    if ($enable) {
+        $userModel->enable2FA($user['id']);
+    } else {
+        $userModel->disable2FA($user['id']);
+    }
+    Flight::json(['message' => $enable ? '2FA enabled.' : '2FA disabled.']);
+});
 
-function showLoginForm() {
-    echo '<h3>Login</h3>';
-    echo '<form method="POST" action="?action=login">';
-    echo '<input type="text" name="username" placeholder="Username" required><br>';
-    echo '<input type="password" name="password" placeholder="Password" required><br>';
-    echo '<button type="submit">Login</button>';
-    echo '</form>';
-}
-
-function showRegistrationForm() {
-    echo '<h3>Register</h3>';
-    echo '<form method="POST" action="?action=register">';
-    echo '<input type="text" name="username" placeholder="Username" required><br>';
-    echo '<input type="email" name="email" placeholder="Email" required><br>';
-    echo '<input type="password" name="password" placeholder="Password" required><br>';
-    echo '<button type="submit">Register</button>';
-    echo '</form>';
-}
+Flight::start();
